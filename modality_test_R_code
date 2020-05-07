@@ -1,0 +1,141 @@
+mod.test=function(data,gamma=.1,delta=.15,epsilon,calc.epsilon=0,boot=100)  {
+  ### Test for anti-mode from Chandler and Polonik (2012) Mode Identification of Volatility...
+  ### In particular, assumes data is on the left side of the mode if testing for unimodality
+  ### Note: package Iso is required
+  ### Inputs:
+  ###   data - a vector representing a univariate time series from t=1 to the mode
+  ###   gamma - the quantile of the residuals on which the test is based
+  ###   delta - how much to trim back the estimated set (beta in the paper)
+  ###   epsilon - the extra area on which we extend the original estimated set
+  ###   calc.epsilon - logical - use data driven approach for estimating epsilon
+  ###   boot - integer - number of bootstrap samples 
+  x=data
+  n=length(x)
+  mod=lm(x[2:n]~x[1:(n-1)]-1)    #fit model
+  eta1=mod$resid   #compute residuals
+  eta2=eta1^2       #compute squared residuals
+  eta2.old=eta2
+  sigma.hat=sqrt(pava(eta2))        #estimate unimodal variance function
+  sigma.hat.old=sigma.hat     #store for later
+  if (calc.epsilon==1)
+  {
+    level=c()
+    e.boot=eta1/sqrt(ksmooth(1:length(eta2),eta2,ba=200,x.points=1:length(eta2))$y)    ###consistent estimator of variance function under both hypotheses#sqrt(sigma.hat)
+    eps.list=seq(.1,1.5,.1)
+    kk=0
+    for (eps in eps.list)  #try a bunch of epsilon values
+    {
+      kk=kk+1
+      p.value.temp=c()
+      for (j in 1:boot)
+      {
+        e.boot.temp=sample(e.boot)		
+        x=c()
+        x[1]=0
+        for (i in 2:n)
+          x[i]=mod$coef[1]*x[i-1]+e.boot.temp[i-1]*sqrt(sigma.hat.old[i-1])	#bootstrap sample under the null			
+        mod=lm(x[2:n]~x[1:(n-1)]-1)
+        eta1=mod$resid
+        eta2=eta1^2	
+        sigma.hat=sqrt(pava(eta2))
+        epsilon=eps
+        uni=unique(sigma.hat)
+        n.sh=length(uni)
+        flops=c()
+        for (i in 1:n.sh)
+        {
+          bounds=range(which(sigma.hat==uni[i]))
+          diff=0
+          k=0
+          while (diff<epsilon & (bounds[1]-k)>0)
+          {
+            k=k+1
+            diff=sum(abs(sigma.hat[(bounds[1]-k):bounds[1]]-uni[i]))
+          }
+          low=bounds[1]-k
+          k=0
+          diff=0
+          while (diff<epsilon & (bounds[2]+k)<length(sigma.hat))
+          {
+            k=k+1
+            diff=sum(abs(sigma.hat[(bounds[2]):(bounds[2]+k)]-uni[i]))
+          }
+          high=bounds[2]+k
+          flops=rbind(flops,c(low,high))
+        }
+        set=flops[which((flops[,2]-flops[,1])==max(flops[,2]-flops[,1]))[1],]
+        errors=eta2[set[1]:set[2]]
+        len=length(errors)
+        errors=errors[floor(delta*len):floor((1-delta)*len)]  #trims residuals on enlarged set
+        q=quantile(errors,1-gamma,na.rm=T)
+        ones=(errors>q)
+        sones=c()
+        for (i in 1:length(ones))
+          sones[i]=sum(ones[1:i])/length(ones)
+        true=seq(0,1,1/length(sones))*gamma
+        ts=sqrt(length(true)/(gamma*(1-gamma)))*max((-true+c(sones,gamma)))
+        p.value.temp[j]=exp(-2*ts^2)  #computes p-value
+      }
+      level[kk]=mean(p.value.temp<.05,na.rm=T)
+    }
+    level2=level-.05       
+    epsilon=lm(eps.list~level2)$coef[1]
+  }
+  sigma.hat=sigma.hat.old
+  sig.uniq=unique(sigma.hat)
+  eta2=eta2.old
+  
+  uni=unique(sigma.hat)
+  n.sh=length(uni)
+  flops=c()
+  for (i in 1:n.sh)
+  {
+    bounds=range(which(sigma.hat==uni[i]))
+    diff=0
+    k=0
+    while (diff<epsilon & (bounds[1]-k)>0)
+    {
+      k=k+1
+      diff=sum(abs(sigma.hat[(bounds[1]-k):bounds[1]]-uni[i]))
+    }
+    low=bounds[1]-k
+    k=0
+    diff=0
+    while (diff<epsilon & (bounds[2]+k)<length(sigma.hat))
+    {
+      k=k+1
+      diff=sum(abs(sigma.hat[(bounds[2]):(bounds[2]+k)]-uni[i]))
+    }
+    high=bounds[2]+k
+    flops=rbind(flops,c(low,high))
+  }
+  set=flops[which((flops[,2]-flops[,1])==max(flops[,2]-flops[,1]))[1],]
+  set2=range(which(uni[which((flops[,2]-flops[,1])==max(flops[,2]-flops[,1]))[1]]==sigma.hat))
+  errors=eta2[set[1]:set[2]]
+  len=length(errors)
+  errors=errors[floor(delta*len):floor((1-delta)*len)]  #trims residuals on enlarged set
+  q=quantile(errors,1-gamma,na.rm=T)
+  ones=(errors>q)
+  sones=c()
+  for (i in 1:length(ones))
+    sones[i]=sum(ones[1:i])/length(ones)
+  true=seq(0,1,1/length(sones))*gamma
+  ts=sqrt(length(true)/(gamma*(1-gamma)))*max((-true+c(sones,gamma)))
+  p.value=exp(-2*ts^2)
+  list(epsilon=epsilon,p.value=p.value,set=set2)
+}
+
+
+###Sample Usage
+###Generate Data
+#require(Iso)
+n=1000  #sample size
+a=seq(1/n,1,1/n)
+sigma=1.2*dnorm(a,.2,.2)+dnorm(a,1,.4)*3  #anti-mode
+#sigma=pava(sigma)  #flatten out anti-mode
+#sigma[200:900]=sigma[200]+(sigma[900]-sigma[200])*(1:701)/701  #linear between 200 and 900
+x=c()
+x[1]=0
+for (i in 2:n)
+  x[i]=.9*x[i-1]+rnorm(1)*sigma[i]
+mod.test(x, calc.epsilon=TRUE)
